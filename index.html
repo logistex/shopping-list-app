@@ -147,30 +147,32 @@
     <span id="count"></span>
     <button type="button" class="clear-btn" id="clear-checked">체크된 항목 삭제</button>
   </div>
+  <p id="error-message" style="display:none; margin-top:12px; padding:10px 14px; border-radius:10px; background:rgba(255,59,48,0.12); color:var(--danger); font-size:13px; text-align:center;"></p>
 </div>
 
-<script>
-  const STORAGE_KEY = "shopping-list-items";
+<script type="module">
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
-  function loadItems() {
-    try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-    } catch {
-      return [];
-    }
-  }
+  const SUPABASE_URL = "https://rkkebybdtoqfbplshrvq.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_MtwMHuEA_z3xKmi_Fx1bIw_gjOmrXTC";
+  const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  function saveItems(items) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-  }
-
-  let items = loadItems();
+  let items = [];
 
   const listEl = document.getElementById("list");
   const formEl = document.getElementById("add-form");
   const inputEl = document.getElementById("item-input");
   const countEl = document.getElementById("count");
   const clearBtn = document.getElementById("clear-checked");
+  const errorEl = document.getElementById("error-message");
+
+  function showError(message) {
+    errorEl.textContent = message;
+    errorEl.style.display = "block";
+    setTimeout(() => {
+      errorEl.style.display = "none";
+    }, 3000);
+  }
 
   function render() {
     listEl.innerHTML = "";
@@ -188,7 +190,7 @@
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.checked = item.checked;
-        checkbox.addEventListener("change", () => toggleItem(item.id));
+        checkbox.addEventListener("change", () => toggleItem(item.id, !item.checked));
 
         const text = document.createElement("span");
         text.className = "item-text";
@@ -212,23 +214,39 @@
     countEl.textContent = total === 0 ? "" : `${checked} / ${total}개 완료`;
   }
 
-  function addItem(text) {
-    items.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2), text, checked: false });
-    saveItems(items);
+  async function loadItems() {
+    const { data, error } = await supabase
+      .from("shopping_items")
+      .select("*")
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      showError("목록을 불러오지 못했습니다.");
+      return;
+    }
+
+    items = data;
     render();
   }
 
-  function toggleItem(id) {
-    const item = items.find((i) => i.id === id);
-    if (item) item.checked = !item.checked;
-    saveItems(items);
-    render();
+  async function addItem(text) {
+    const { error } = await supabase.from("shopping_items").insert({ text, checked: false });
+    if (error) showError("추가에 실패했습니다.");
   }
 
-  function deleteItem(id) {
-    items = items.filter((i) => i.id !== id);
-    saveItems(items);
-    render();
+  async function toggleItem(id, checked) {
+    const { error } = await supabase.from("shopping_items").update({ checked }).eq("id", id);
+    if (error) showError("변경에 실패했습니다.");
+  }
+
+  async function deleteItem(id) {
+    const { error } = await supabase.from("shopping_items").delete().eq("id", id);
+    if (error) showError("삭제에 실패했습니다.");
+  }
+
+  async function clearChecked() {
+    const { error } = await supabase.from("shopping_items").delete().eq("checked", true);
+    if (error) showError("삭제에 실패했습니다.");
   }
 
   formEl.addEventListener("submit", (e) => {
@@ -241,12 +259,17 @@
   });
 
   clearBtn.addEventListener("click", () => {
-    items = items.filter((i) => !i.checked);
-    saveItems(items);
-    render();
+    clearChecked();
   });
 
-  render();
+  supabase
+    .channel("shopping_items_changes")
+    .on("postgres_changes", { event: "*", schema: "public", table: "shopping_items" }, () => {
+      loadItems();
+    })
+    .subscribe();
+
+  loadItems();
 </script>
 </body>
 </html>
